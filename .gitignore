@@ -1,0 +1,6 @@
+dist/
+*.msix
+*.cer
+*.log
+*.lib
+vscode-explorer-command/
