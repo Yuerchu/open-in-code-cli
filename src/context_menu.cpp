@@ -10,6 +10,7 @@
 #include <wrl/implements.h>
 #include <wrl/client.h>
 #include <string>
+#include <vector>
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shell32.lib")
@@ -20,6 +21,7 @@
 using Microsoft::WRL::ClassicCom;
 using Microsoft::WRL::ComPtr;
 using Microsoft::WRL::InhibitRoOriginateError;
+using Microsoft::WRL::Make;
 using Microsoft::WRL::Module;
 using Microsoft::WRL::ModuleType;
 using Microsoft::WRL::RuntimeClass;
@@ -35,6 +37,9 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     return TRUE;
 }
 
+// ============================================================
+// Helpers
+// ============================================================
 namespace {
 
 std::wstring GetDllDirectory() {
@@ -44,6 +49,10 @@ std::wstring GetDllDirectory() {
     auto pos = dir.find_last_of(L'\\');
     if (pos != std::wstring::npos) dir.resize(pos);
     return dir;
+}
+
+std::wstring GetIconPath(const wchar_t* name) {
+    return GetDllDirectory() + L"\\" + name;
 }
 
 std::wstring QuoteArg(const std::wstring& arg) {
@@ -70,117 +79,219 @@ std::wstring QuoteArg(const std::wstring& arg) {
     return out;
 }
 
+HRESULT LaunchWT(IShellItemArray* items, const wchar_t* argsTemplate) {
+    if (!items) return S_OK;
+    DWORD count = 0;
+    if (FAILED(items->GetCount(&count))) return S_OK;
+    for (DWORD i = 0; i < count; ++i) {
+        ComPtr<IShellItem> item;
+        if (SUCCEEDED(items->GetItemAt(i, &item))) {
+            LPWSTR filePath = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &filePath))) {
+                std::wstring args(argsTemplate);
+                // Replace {path} placeholder
+                std::wstring quoted = QuoteArg(filePath);
+                size_t pos;
+                while ((pos = args.find(L"{path}")) != std::wstring::npos)
+                    args.replace(pos, 6, quoted);
+                while ((pos = args.find(L"{rawpath}")) != std::wstring::npos)
+                    args.replace(pos, 9, filePath);
+                ShellExecuteW(nullptr, L"open", L"wt.exe",
+                              args.c_str(), nullptr, SW_SHOWNORMAL);
+                CoTaskMemFree(filePath);
+            }
+        }
+    }
+    return S_OK;
+}
+
 } // namespace
 
 // ============================================================
-// Claude Code - {E8A1D5B2-7C3F-4A9E-B6D4-1F2E3A4B5C6D}
+// Child Commands (not COM-registered)
+// ============================================================
+
+// Claude Code (新对话) — claude
+class ClaudeNewCommand final
+    : public RuntimeClass<RuntimeClassFlags<ClassicCom | InhibitRoOriginateError>,
+                          IExplorerCommand> {
+ public:
+  IFACEMETHODIMP GetTitle(IShellItemArray*, PWSTR* name) {
+      return SHStrDupW(L"Claude Code (\x65B0\x5BF9\x8BDD)", name);
+  }
+  IFACEMETHODIMP GetIcon(IShellItemArray*, PWSTR* icon) {
+      return SHStrDupW(GetIconPath(L"claude.ico").c_str(), icon);
+  }
+  IFACEMETHODIMP GetToolTip(IShellItemArray*, PWSTR* t) { *t = nullptr; return E_NOTIMPL; }
+  IFACEMETHODIMP GetCanonicalName(GUID* g) { *g = GUID_NULL; return S_OK; }
+  IFACEMETHODIMP GetState(IShellItemArray*, BOOL, EXPCMDSTATE* s) { *s = ECS_ENABLED; return S_OK; }
+  IFACEMETHODIMP GetFlags(EXPCMDFLAGS* f) { *f = ECF_DEFAULT; return S_OK; }
+  IFACEMETHODIMP EnumSubCommands(IEnumExplorerCommand** e) { *e = nullptr; return E_NOTIMPL; }
+  IFACEMETHODIMP Invoke(IShellItemArray* items, IBindCtx*) {
+      return LaunchWT(items, L"-d {path} -- claude");
+  }
+};
+
+// Claude Code (继续对话) — claude -c
+class ClaudeContinueCommand final
+    : public RuntimeClass<RuntimeClassFlags<ClassicCom | InhibitRoOriginateError>,
+                          IExplorerCommand> {
+ public:
+  IFACEMETHODIMP GetTitle(IShellItemArray*, PWSTR* name) {
+      return SHStrDupW(L"Claude Code (\x7EE7\x7EED\x5BF9\x8BDD)", name);
+  }
+  IFACEMETHODIMP GetIcon(IShellItemArray*, PWSTR* icon) {
+      return SHStrDupW(GetIconPath(L"claude.ico").c_str(), icon);
+  }
+  IFACEMETHODIMP GetToolTip(IShellItemArray*, PWSTR* t) { *t = nullptr; return E_NOTIMPL; }
+  IFACEMETHODIMP GetCanonicalName(GUID* g) { *g = GUID_NULL; return S_OK; }
+  IFACEMETHODIMP GetState(IShellItemArray*, BOOL, EXPCMDSTATE* s) { *s = ECS_ENABLED; return S_OK; }
+  IFACEMETHODIMP GetFlags(EXPCMDFLAGS* f) { *f = ECF_DEFAULT; return S_OK; }
+  IFACEMETHODIMP EnumSubCommands(IEnumExplorerCommand** e) { *e = nullptr; return E_NOTIMPL; }
+  IFACEMETHODIMP Invoke(IShellItemArray* items, IBindCtx*) {
+      return LaunchWT(items, L"-d {path} -- claude -c");
+  }
+};
+
+// Claude Code (从历史记录继续) — claude --resume
+class ClaudeResumeCommand final
+    : public RuntimeClass<RuntimeClassFlags<ClassicCom | InhibitRoOriginateError>,
+                          IExplorerCommand> {
+ public:
+  IFACEMETHODIMP GetTitle(IShellItemArray*, PWSTR* name) {
+      return SHStrDupW(L"Claude Code (\x4ECE\x5386\x53F2\x8BB0\x5F55\x7EE7\x7EED)", name);
+  }
+  IFACEMETHODIMP GetIcon(IShellItemArray*, PWSTR* icon) {
+      return SHStrDupW(GetIconPath(L"claude.ico").c_str(), icon);
+  }
+  IFACEMETHODIMP GetToolTip(IShellItemArray*, PWSTR* t) { *t = nullptr; return E_NOTIMPL; }
+  IFACEMETHODIMP GetCanonicalName(GUID* g) { *g = GUID_NULL; return S_OK; }
+  IFACEMETHODIMP GetState(IShellItemArray*, BOOL, EXPCMDSTATE* s) { *s = ECS_ENABLED; return S_OK; }
+  IFACEMETHODIMP GetFlags(EXPCMDFLAGS* f) { *f = ECF_DEFAULT; return S_OK; }
+  IFACEMETHODIMP EnumSubCommands(IEnumExplorerCommand** e) { *e = nullptr; return E_NOTIMPL; }
+  IFACEMETHODIMP Invoke(IShellItemArray* items, IBindCtx*) {
+      return LaunchWT(items, L"-d {path} -- claude --resume");
+  }
+};
+
+// Separator
+class SeparatorCommand final
+    : public RuntimeClass<RuntimeClassFlags<ClassicCom | InhibitRoOriginateError>,
+                          IExplorerCommand> {
+ public:
+  IFACEMETHODIMP GetTitle(IShellItemArray*, PWSTR* name) { *name = nullptr; return S_OK; }
+  IFACEMETHODIMP GetIcon(IShellItemArray*, PWSTR* i) { *i = nullptr; return E_NOTIMPL; }
+  IFACEMETHODIMP GetToolTip(IShellItemArray*, PWSTR* t) { *t = nullptr; return E_NOTIMPL; }
+  IFACEMETHODIMP GetCanonicalName(GUID* g) { *g = GUID_NULL; return S_OK; }
+  IFACEMETHODIMP GetState(IShellItemArray*, BOOL, EXPCMDSTATE* s) { *s = ECS_ENABLED; return S_OK; }
+  IFACEMETHODIMP GetFlags(EXPCMDFLAGS* f) { *f = ECF_ISSEPARATOR; return S_OK; }
+  IFACEMETHODIMP EnumSubCommands(IEnumExplorerCommand** e) { *e = nullptr; return E_NOTIMPL; }
+  IFACEMETHODIMP Invoke(IShellItemArray*, IBindCtx*) { return S_OK; }
+};
+
+// Codex (WSL)
+class CodexCommand final
+    : public RuntimeClass<RuntimeClassFlags<ClassicCom | InhibitRoOriginateError>,
+                          IExplorerCommand> {
+ public:
+  IFACEMETHODIMP GetTitle(IShellItemArray*, PWSTR* name) {
+      return SHStrDupW(L"Codex", name);
+  }
+  IFACEMETHODIMP GetIcon(IShellItemArray*, PWSTR* icon) {
+      return SHStrDupW(GetIconPath(L"codex.ico").c_str(), icon);
+  }
+  IFACEMETHODIMP GetToolTip(IShellItemArray*, PWSTR* t) { *t = nullptr; return E_NOTIMPL; }
+  IFACEMETHODIMP GetCanonicalName(GUID* g) { *g = GUID_NULL; return S_OK; }
+  IFACEMETHODIMP GetState(IShellItemArray*, BOOL, EXPCMDSTATE* s) { *s = ECS_ENABLED; return S_OK; }
+  IFACEMETHODIMP GetFlags(EXPCMDFLAGS* f) { *f = ECF_DEFAULT; return S_OK; }
+  IFACEMETHODIMP EnumSubCommands(IEnumExplorerCommand** e) { *e = nullptr; return E_NOTIMPL; }
+  IFACEMETHODIMP Invoke(IShellItemArray* items, IBindCtx*) {
+      return LaunchWT(items, L"-- wsl --cd {path} bash -lic codex");
+  }
+};
+
+// ============================================================
+// Sub-command enumerator
+// ============================================================
+class SubCommandEnumerator final
+    : public RuntimeClass<RuntimeClassFlags<ClassicCom | InhibitRoOriginateError>,
+                          IEnumExplorerCommand> {
+    std::vector<ComPtr<IExplorerCommand>> m_commands;
+    DWORD m_current = 0;
+
+ public:
+    SubCommandEnumerator() {
+        auto add = [this](auto obj) {
+            ComPtr<IExplorerCommand> cmd;
+            obj->QueryInterface(IID_PPV_ARGS(&cmd));
+            m_commands.push_back(std::move(cmd));
+        };
+        add(Make<ClaudeNewCommand>());
+        add(Make<ClaudeContinueCommand>());
+        add(Make<ClaudeResumeCommand>());
+        add(Make<SeparatorCommand>());
+        add(Make<CodexCommand>());
+    }
+
+    IFACEMETHODIMP Next(ULONG celt, IExplorerCommand** rgelt, ULONG* pceltFetched) {
+        ULONG fetched = 0;
+        while (fetched < celt && m_current < m_commands.size()) {
+            m_commands[m_current].CopyTo(&rgelt[fetched]);
+            m_current++;
+            fetched++;
+        }
+        if (pceltFetched) *pceltFetched = fetched;
+        return (fetched == celt) ? S_OK : S_FALSE;
+    }
+
+    IFACEMETHODIMP Skip(ULONG celt) {
+        m_current = min(m_current + celt, (DWORD)m_commands.size());
+        return (m_current < m_commands.size()) ? S_OK : S_FALSE;
+    }
+
+    IFACEMETHODIMP Reset() {
+        m_current = 0;
+        return S_OK;
+    }
+
+    IFACEMETHODIMP Clone(IEnumExplorerCommand** ppenum) {
+        *ppenum = nullptr;
+        return E_NOTIMPL;
+    }
+};
+
+// ============================================================
+// Parent Command — {E8A1D5B2-7C3F-4A9E-B6D4-1F2E3A4B5C6D}
 // ============================================================
 class __declspec(uuid("E8A1D5B2-7C3F-4A9E-B6D4-1F2E3A4B5C6D"))
-    ClaudeCodeCommand final
+    OpenInCodeCLICommand final
     : public RuntimeClass<RuntimeClassFlags<ClassicCom | InhibitRoOriginateError>,
                           IExplorerCommand> {
  public:
   IFACEMETHODIMP GetTitle(IShellItemArray*, PWSTR* name) {
-      // "使用 Claude Code 打开"
-      return SHStrDupW(L"\x4F7F\x7528 Claude Code \x6253\x5F00", name);
+      return SHStrDupW(L"Open in Code CLI", name);
   }
   IFACEMETHODIMP GetIcon(IShellItemArray*, PWSTR* icon) {
-      std::wstring path = GetDllDirectory() + L"\\claude.ico";
-      return SHStrDupW(path.c_str(), icon);
+      // Use Windows Terminal icon
+      return SHStrDupW(L"wt.exe", icon);
   }
-  IFACEMETHODIMP GetToolTip(IShellItemArray*, PWSTR* tip) {
-      *tip = nullptr; return E_NOTIMPL;
-  }
-  IFACEMETHODIMP GetCanonicalName(GUID* guid) {
-      *guid = GUID_NULL; return S_OK;
-  }
-  IFACEMETHODIMP GetState(IShellItemArray*, BOOL, EXPCMDSTATE* state) {
-      *state = ECS_ENABLED; return S_OK;
-  }
-  IFACEMETHODIMP GetFlags(EXPCMDFLAGS* flags) {
-      *flags = ECF_DEFAULT; return S_OK;
-  }
+  IFACEMETHODIMP GetToolTip(IShellItemArray*, PWSTR* t) { *t = nullptr; return E_NOTIMPL; }
+  IFACEMETHODIMP GetCanonicalName(GUID* g) { *g = GUID_NULL; return S_OK; }
+  IFACEMETHODIMP GetState(IShellItemArray*, BOOL, EXPCMDSTATE* s) { *s = ECS_ENABLED; return S_OK; }
+  IFACEMETHODIMP GetFlags(EXPCMDFLAGS* f) { *f = ECF_HASSUBCOMMANDS; return S_OK; }
   IFACEMETHODIMP EnumSubCommands(IEnumExplorerCommand** e) {
-      *e = nullptr; return E_NOTIMPL;
-  }
-  IFACEMETHODIMP Invoke(IShellItemArray* items, IBindCtx*) {
-      if (!items) return S_OK;
-      DWORD count = 0;
-      if (FAILED(items->GetCount(&count))) return S_OK;
-      for (DWORD i = 0; i < count; ++i) {
-          ComPtr<IShellItem> item;
-          if (SUCCEEDED(items->GetItemAt(i, &item))) {
-              LPWSTR filePath = nullptr;
-              if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &filePath))) {
-                  std::wstring args = L"-d " + QuoteArg(filePath) + L" -- claude";
-                  ShellExecuteW(nullptr, L"open", L"wt.exe",
-                                args.c_str(), nullptr, SW_SHOWNORMAL);
-                  CoTaskMemFree(filePath);
-              }
-          }
-      }
+      auto enumerator = Make<SubCommandEnumerator>();
+      *e = enumerator.Detach();
       return S_OK;
   }
+  IFACEMETHODIMP Invoke(IShellItemArray*, IBindCtx*) { return S_OK; }
 };
 
 // ============================================================
-// Codex (WSL) - {F9B2E6C3-8D4A-4BAF-C7E5-2A3F4B5C6D7E}
+// COM registration — only the parent command
 // ============================================================
-class __declspec(uuid("F9B2E6C3-8D4A-4BAF-C7E5-2A3F4B5C6D7E"))
-    CodexCommand final
-    : public RuntimeClass<RuntimeClassFlags<ClassicCom | InhibitRoOriginateError>,
-                          IExplorerCommand> {
- public:
-  IFACEMETHODIMP GetTitle(IShellItemArray*, PWSTR* name) {
-      // "使用 Codex 打开"
-      return SHStrDupW(L"\x4F7F\x7528 Codex \x6253\x5F00", name);
-  }
-  IFACEMETHODIMP GetIcon(IShellItemArray*, PWSTR* icon) {
-      std::wstring path = GetDllDirectory() + L"\\codex.ico";
-      return SHStrDupW(path.c_str(), icon);
-  }
-  IFACEMETHODIMP GetToolTip(IShellItemArray*, PWSTR* tip) {
-      *tip = nullptr; return E_NOTIMPL;
-  }
-  IFACEMETHODIMP GetCanonicalName(GUID* guid) {
-      *guid = GUID_NULL; return S_OK;
-  }
-  IFACEMETHODIMP GetState(IShellItemArray*, BOOL, EXPCMDSTATE* state) {
-      *state = ECS_ENABLED; return S_OK;
-  }
-  IFACEMETHODIMP GetFlags(EXPCMDFLAGS* flags) {
-      *flags = ECF_DEFAULT; return S_OK;
-  }
-  IFACEMETHODIMP EnumSubCommands(IEnumExplorerCommand** e) {
-      *e = nullptr; return E_NOTIMPL;
-  }
-  IFACEMETHODIMP Invoke(IShellItemArray* items, IBindCtx*) {
-      if (!items) return S_OK;
-      DWORD count = 0;
-      if (FAILED(items->GetCount(&count))) return S_OK;
-      for (DWORD i = 0; i < count; ++i) {
-          ComPtr<IShellItem> item;
-          if (SUCCEEDED(items->GetItemAt(i, &item))) {
-              LPWSTR filePath = nullptr;
-              if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &filePath))) {
-                  // Use wsl --cd which auto-converts Windows paths
-                  std::wstring args = L"-- wsl --cd " + QuoteArg(filePath)
-                                    + L" bash -lic codex";
-                  ShellExecuteW(nullptr, L"open", L"wt.exe",
-                                args.c_str(), nullptr, SW_SHOWNORMAL);
-                  CoTaskMemFree(filePath);
-              }
-          }
-      }
-      return S_OK;
-  }
-};
-
-// COM registration
-CoCreatableClass(ClaudeCodeCommand)
-CoCreatableClass(CodexCommand)
-CoCreatableClassWrlCreatorMapInclude(ClaudeCodeCommand)
-CoCreatableClassWrlCreatorMapInclude(CodexCommand)
+CoCreatableClass(OpenInCodeCLICommand)
+CoCreatableClassWrlCreatorMapInclude(OpenInCodeCLICommand)
 
 STDAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv) {
     if (ppv == nullptr) return E_POINTER;
